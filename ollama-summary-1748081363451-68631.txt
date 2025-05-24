@@ -1,6 +1,0 @@
-
-[2025-05-24T10:09:23.451Z] Received new request. Syllabus: 1- Introdução aos Sistemas Reconfiguráveis
-2- FPGAs (Field Programmable Gate Arrays)
-3- Linguagens de Programação VHDL e Verilog
-
-[2025-05-24T10:10:04.511Z] Summary process completed successfully.

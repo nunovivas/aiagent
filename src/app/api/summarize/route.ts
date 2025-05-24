@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fetch from 'node-fetch';
-import { writeFileSync, appendFileSync } from 'fs';
+import { writeFileSync, appendFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { Readable } from 'stream';
 // @ts-ignore
@@ -8,20 +8,44 @@ import fontkit from '@pdf-lib/fontkit';
 
 export const runtime = 'nodejs';
 
-async function searchWeb(query: string): Promise<string[]> {
-  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0',
-      'Accept-Language': 'en-US,en;q=0.9',
-    },
+// Helper to convert Node.js Readable to Web ReadableStream
+function toWebStream(nodeStream: Readable): ReadableStream<any> {
+  return new ReadableStream({
+    async pull(controller) {
+      for await (const chunk of nodeStream) {
+        controller.enqueue(typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk);
+      }
+      controller.close();
+    }
   });
-  const html = await res.text();
-  const urlRegex = /<a[^>]+class="result__a"[^>]+href="([^"]+)"/g;
+}
+
+// Uses SerpAPI Web Search instead of Bing
+async function searchWeb(query: string): Promise<string[]> {
+  let apiKey = '';
+  try {
+    apiKey = readFileSync(join(process.cwd(), 'serpapi.key'), 'utf8').trim();
+  } catch (e) {
+    console.error('SerpAPI key file not found or unreadable:', e);
+    return [];
+  }
+  const endpoint = `https://serpapi.com/search.json?q=${encodeURIComponent(query)}&engine=google&num=10&api_key=${apiKey}`;
+  const res = await fetch(endpoint);
+  if (!res.ok) {
+    console.error('SerpAPI error:', res.status, await res.text());
+    return [];
+  }
+  type SerpApiResponse = {
+    organic_results?: Array<{ link?: string }>;
+
+  };
+  const data: SerpApiResponse = await res.json() as any;
+  // Extract URLs from organic_results
   const urls: string[] = [];
-  let match;
-  while ((match = urlRegex.exec(html)) !== null && urls.length < 3) {
-    urls.push(match[1]);
+  if (Array.isArray(data.organic_results)) {
+    for (const item of data.organic_results) {
+      if (item.link) urls.push(item.link);
+    }
   }
   return urls;
 }
@@ -171,9 +195,11 @@ export async function POST(req: NextRequest) {
   if (!syllabus || typeof syllabus !== 'string') {
     return NextResponse.json({ error: 'Missing syllabus' }, { status: 400 });
   }
-  // Create a unique log file for each submission
+  // Create a unique log file for each submission in the log folder
+  const logDir = join(process.cwd(), 'src', 'app', 'log');
+  try { require('fs').mkdirSync(logDir, { recursive: true }); } catch {}
   const submissionId = Date.now() + '-' + Math.floor(Math.random() * 100000);
-  const logPath = join(process.cwd(), `ollama-summary-${submissionId}.txt`);
+  const logPath = join(logDir, `ollama-summary-${submissionId}.txt`);
   function logToFile(message: string) {
     appendFileSync(logPath, `\n[${new Date().toISOString()}] ${message}\n`, { encoding: 'utf8' });
   }
@@ -222,46 +248,30 @@ export async function POST(req: NextRequest) {
         for (const url of urls) {
           if (!allLinks.includes(url)) {
             const content = await fetchWebContent(url);
-            if (content) {
-              allContent += `\n[Source: ${url}]\n${content}`;
+            if (content && content.length > 0) {
+              allContent += ' ' + content;
               allLinks.push(url);
             }
-            if (allContent.split(/\s+/).length >= 10000) break;
           }
         }
         tries++;
-        await delay(1000);
       }
       // Summarize the collected content for the topic
       pushStatus(`Summarizing content for topic ${i + 1} of ${topics.length}`);
-      let llmPrompt = `Syllabus topic: ${translated}\n`;
-      if (allContent.trim().length > 0) {
-        llmPrompt += `Web content (with sources):\n${allContent}`;
-      } else {
-        llmPrompt += `No web content could be retrieved for this topic.`;
-      }
-      let summary = await summarizeWithOllama(llmPrompt);
-      // Add links as a separate paragraph at the end
-      if (allLinks.length > 0) {
-        summary += `\n\nSources:\n` + allLinks.map(link => `- ${link}`).join('\n');
-      }
-      console.log(`Summary for topic "${translated}":`, summary);
-      console.log(`Collected ${allLinks.length} links and ${allContent.split(/\s+/).length} words for topic "${translated}"`);
-      console.log('Links:', allLinks);
-      topicResults.push({ topic, translated, sources: allLinks, content: allContent, summary });
+      const summary = await summarizeWithOllama(allContent);
+      // Append sources as a separate paragraph
+      const summaryWithSources = allLinks.length
+        ? summary.trim() + '\n\nSources:\n' + allLinks.join('\n')
+        : summary.trim();
+      topicResults.push({ topic, translated, sources: allLinks, content: allContent, summary: summaryWithSources });
+      console.log('Links for topic', i + 1, ':', allLinks);
     }
-    pushStatus('Rendering summary...');
-    const result = JSON.stringify(topicResults);
-    stream.push(encoder.encode('SUMMARY:' + result));
+    pushStatus('Generating final summary with bullet points...');
+    // Instead of generating a single summary, send per-topic summaries as JSON array
+    stream.push(encoder.encode('SUMMARY:' + JSON.stringify(topicResults)));
     stream.push(null);
-    logToFile('Summary process completed successfully.');
   })();
-  return new NextResponse(stream as any, {
-    status: 200,
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    },
+  return new NextResponse(toWebStream(stream), {
+    headers: { 'Content-Type': 'application/octet-stream' }
   });
 }

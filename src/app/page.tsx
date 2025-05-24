@@ -164,8 +164,7 @@ function SummaryDisplay({ summary }: { summary: string }) {
             const links = sourcesBlock
               .split(/\n/)
               .map((line: string) => line.trim())
-              .filter((line: string) => line.startsWith('- '))
-              .map((line: string) => line.replace(/^\-\s*/, ''));
+              .filter((line: string) => line.length > 0);
             if (!links.length) return null;
             return (
               <div className="mb-2 mt-6">
