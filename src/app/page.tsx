@@ -261,6 +261,9 @@ function SummaryDisplay({
 											>
 												{url}
 											</a>
+											<span className='ml-2 text-xs text-gray-500'>
+												{formatApaCitation(url)}
+											</span>
 										</li>
 									))}
 								</ul>
@@ -271,4 +274,19 @@ function SummaryDisplay({
 			)}
 		</div>
 	);
+}
+
+// Helper: Format a URL as a simple APA web citation
+function formatApaCitation(url: string): string {
+	try {
+		const u = new URL(url);
+		const domain = u.hostname.replace(/^www\./, '');
+		const today = new Date();
+		const yyyy = today.getFullYear();
+		const mm = String(today.getMonth() + 1).padStart(2, '0');
+		const dd = String(today.getDate()).padStart(2, '0');
+		return `(n.d.). Retrieved ${yyyy}-${mm}-${dd}, from ${u.origin}/`;
+	} catch {
+		return '';
+	}
 }

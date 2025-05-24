@@ -6,6 +6,7 @@ import { Readable } from 'stream';
 // @ts-ignore
 import fontkit from '@pdf-lib/fontkit';
 import { SERPAPI_KEY_PATH, OLLAMA_API_URL, LOG_DIR } from '../../config';
+import * as cheerio from 'cheerio';
 
 export const runtime = 'nodejs';
 
@@ -58,9 +59,25 @@ async function fetchWebContent(url: string): Promise<string> {
     const res = await fetch(url, { signal: controller.signal });
     clearTimeout(timeout);
     if (!res.ok) return '';
-    const text = await res.text();
-    // Simple extraction: get first 2000 chars
-    const content = text.replace(/\s+/g, ' ').slice(0, 2000);
+    const html = await res.text();
+    // Use cheerio to extract only visible, relevant text from HTML
+    const $ = cheerio.load(html);
+    // Remove unwanted tags
+    $('script, style, noscript, head, meta, link, title, iframe, svg, canvas, nav, footer, form, input, button, aside, header, object, embed, select, option, textarea, label, [aria-hidden="true"], [role="navigation"], [role="banner"], [role="contentinfo"], [role="complementary"], [role="search"], [hidden]').remove();
+    // Remove elements with display:none or visibility:hidden
+    $('[style*="display:none"], [style*="visibility:hidden"]').remove();
+    // Remove elements with class or id that are likely to be non-content
+    $('[class*="nav"], [class*="footer"], [class*="header"], [class*="sidebar"], [id*="nav"], [id*="footer"], [id*="header"], [id*="sidebar"]').remove();
+    // Get main content text
+    let text = '';
+    // Try to get <main> content if present, else fallback to <body>
+    if ($('main').length) {
+      text = $('main').text();
+    } else {
+      text = $('body').text();
+    }
+    // Collapse whitespace, remove excessive blank lines, trim
+    const content = text.replace(/\s+/g, ' ').replace(/\n{2,}/g, '\n').trim().slice(0, 2000);
     return content;
   } catch (err) {
     clearTimeout(timeout);
@@ -156,7 +173,7 @@ async function summarizeWithOllama(text: string): Promise<string> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model,
-        prompt: `Summarize the following college course syllabus topic and related web data in English, for study purposes. Limit to 1-2 paragraphs.\n\n${text}`,
+        prompt: `Summarize the following college course syllabus topic and related web data in clear, professional English prose. Only output the summary itself—do not include any meta tags, social media links, your own thoughts, or commentary. Do not list findings or use bullet points. Do not mention the source website except in the Sources section. Limit to 1-2 paragraphs.Also if you receive an HTML text, dont analyse the HTML but only the human readable text it contains. You should only return the Summary. No comments or any kind of conversation.\n\n${text}`,
         stream: false
       })
     });
@@ -243,36 +260,59 @@ export async function POST(req: NextRequest) {
       let allContent = '';
       let allLinks: string[] = [];
       let tries = 0;
+      let lastContentLength = 0;
       // Keep scraping until we have at least 10,000 words or 10 URLs
       while (allContent.split(/\s+/).length < 10000 && tries < 10) {
         const urls = await searchWeb(translated);
+        let newContentAdded = false;
         for (const url of urls) {
           if (!allLinks.includes(url)) {
             const content = await fetchWebContent(url);
-            if (content && content.length > 0) {
+            if (content) {
               allContent += ' ' + content;
               allLinks.push(url);
+              newContentAdded = true;
+              logToFile(`Fetched content from ${url}`);
             }
           }
         }
         tries++;
+        // If no new content was added, break to avoid infinite loop
+        if (!newContentAdded) break;
+      }
+      // Limit content to 10,000 words
+      const contentWords = allContent.split(/\s+/);
+      if (contentWords.length > 10000) {
+        allContent = contentWords.slice(0, 10000).join(' ');
       }
       // Summarize the collected content for the topic
-      pushStatus(`Summarizing content for topic ${i + 1} of ${topics.length}`);
+      logToFile(`Summarizing topic: ${translated}\nContent fed to LLM (first 500 chars):\n${allContent.slice(0, 500)}\n---END OF FEED---`);
+      pushStatus(`Summarizing content for topic ${i + 1} of ${topics.length}...`);
       const summary = await summarizeWithOllama(allContent);
-      // Append sources as a separate paragraph
-      const summaryWithSources = allLinks.length
-        ? summary.trim() + '\n\nSources:\n' + allLinks.join('\n')
-        : summary.trim();
-      topicResults.push({ topic, translated, sources: allLinks, content: allContent, summary: summaryWithSources });
-      console.log('Links for topic', i + 1, ':', allLinks);
+      topicResults.push({ topic, translated, sources: allLinks, content: allContent, summary });
     }
-    pushStatus('Generating final summary with bullet points...');
-    // Instead of generating a single summary, send per-topic summaries as JSON array
-    stream.push(encoder.encode('SUMMARY:' + JSON.stringify(topicResults)));
+    pushStatus('Generating final summary document...');
+    // Generate a final summary document as a JSON array for tabbed UI
+    const summaryArray = topicResults.map(({ topic, translated, sources, content, summary }) => ({
+      topic,
+      translated,
+      summary,
+      sources
+    }));
+    const finalSummary = JSON.stringify(summaryArray);
+    // If requested, stream the response
+    if (isStatusStream) {
+      stream.push(encoder.encode('SUMMARY:' + finalSummary));
+      stream.push(null);
+    } else {
+      return NextResponse.json({ summary: finalSummary });
+    }
+  })().catch(err => {
+    console.error('Error processing request:', err);
+    stream.push(encoder.encode('ERROR:An error occurred while processing your request.'));
     stream.push(null);
-  })();
-  return new NextResponse(toWebStream(stream), {
-    headers: { 'Content-Type': 'application/octet-stream' }
+  });
+  return new Response(toWebStream(stream), {
+    headers: { 'Content-Type': 'text/markdown; charset=utf-8' }
   });
 }
