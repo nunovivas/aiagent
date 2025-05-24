@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fetch from 'node-fetch';
-import { writeFileSync, appendFileSync, readFileSync } from 'fs';
+import { appendFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { Readable } from 'stream';
-// @ts-ignore
-import fontkit from '@pdf-lib/fontkit';
 import { SERPAPI_KEY_PATH, OLLAMA_API_URL, LOG_DIR } from '../../config';
 import * as cheerio from 'cheerio';
 
@@ -85,86 +83,10 @@ async function fetchWebContent(url: string): Promise<string> {
   }
 }
 
-function extractBulletPoints(text: string): string[] {
-  // Split by newlines, filter out empty lines, and trim
-  return text
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(line => line.length > 0 && /^[0-9a-zA-Z\-•*]/.test(line));
-}
-
 async function delay(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function searchWebForEachBullet(bullets: string[]): Promise<{ bullet: string, url: string, content: string }[]> {
-  const results: { bullet: string, url: string, content: string }[] = [];
-  for (const bullet of bullets) {
-    const urls = await searchWeb(bullet);
-    if (urls.length === 0) {
-      results.push({ bullet, url: '', content: '' });
-      await delay(1500); // Add delay between requests
-      continue;
-    }
-    // Fix: Only push the first url/content per bullet, not multiple times
-    const url = urls[0];
-    const content = await fetchWebContent(url);
-    results.push({ bullet, url, content });
-    await delay(1500); // Add delay between requests
-  }
-  return results;
-}
-
-async function summarizeWithOllamaBullets(syllabus: string, bulletResults: { bullet: string, url: string, content: string }[]): Promise<string> {
-  const models = ['llama3.2:latest', 'llama3.1:latest'];
-  let prompt = `Given the following college course syllabus (in Portuguese) and web search results for each topic, write a study summary in English, organized by the bullet points in the syllabus. For each bullet, summarize the web content and provide the source link. Limit to 3 pages.\n\nSyllabus:\n${syllabus}\n\nWeb results by bullet:`;
-  for (const { bullet, url, content } of bulletResults) {
-    prompt += `\n\nBullet: ${bullet}\nURL: ${url}\nContent: ${content}`;
-  }
-  for (const model of models) {
-    const response = await fetch(OLLAMA_API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        prompt,
-        stream: false
-      })
-    });
-    const data = await response.json();
-    const summary = (typeof data === 'object' && data && 'response' in data && typeof data.response === 'string') ? data.response : '';
-    if (summary.trim()) {
-      return summary;
-    }
-  }
-  return 'No summary generated.';
-}
-
-async function extractTopicsWithOllama(syllabus: string): Promise<string[]> {
-  const models = ['llama3.2:latest', 'llama3.1:latest'];
-  const prompt = `Given the following college course syllabus (in Portuguese), extract and return a JSON array of the main topics or bullet points, in Portuguese. Only return the JSON array, nothing else.\n\nSyllabus:\n${syllabus}`;
-  for (const model of models) {
-    const response = await fetch(OLLAMA_API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, prompt, stream: false })
-    });
-    const data = await response.json();
-    const text = (typeof data === 'object' && data && 'response' in data && typeof data.response === 'string') ? data.response : '';
-    try {
-      const jsonStart = text.indexOf('[');
-      const jsonEnd = text.lastIndexOf(']') + 1;
-      if (jsonStart !== -1 && jsonEnd !== -1) {
-        const arr = JSON.parse(text.slice(jsonStart, jsonEnd));
-        if (Array.isArray(arr)) return arr.map((t: any) => String(t));
-      }
-    } catch (e) {
-    }
-  }
-  return [];
-}
-
-// Add this helper to summarize a single topic
 async function summarizeWithOllama(text: string): Promise<string> {
   const models = ['llama3.2:latest', 'llama3.1:latest'];
   for (const model of models) {
@@ -173,7 +95,8 @@ async function summarizeWithOllama(text: string): Promise<string> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model,
-        prompt: `Summarize the following college course syllabus topic and related web data in clear, professional English prose. Only output the summary itself—do not include any meta tags, social media links, your own thoughts, or commentary. Do not list findings or use bullet points. Do not mention the source website except in the Sources section. Limit to 1-2 paragraphs.Also if you receive an HTML text, dont analyse the HTML but only the human readable text it contains. You should only return the Summary. No comments or any kind of conversation.\n\n${text}`,
+        //old prompt prompt: `Summarize the following text which might be in html and related web data in clear, professional English prose. Only output the summary itself—do not include any meta tags, social media links, your own thoughts, or commentary. Do not list findings or use bullet points. Do not mention the source website except in the Sources section. Limit to 1-2 paragraphs. Only use the human readable text.\n\n${text}`,
+        prompt:`You are a web content extraction assistant.\n Given the full raw HTML source of a web page, extract ONLY the **main readable article or relevant textual content** — no ads, headers, footers, sidebars, navigation, or scripts.\n Then **summarize** that extracted content clearly and concisely in a few paragraphs.\n DO NOT include any metadata, HTML, code, titles, URLs, disclaimers, or explanations. Output ONLY the clean, summarized main content as plain text.\nHere is the HTML: ${text}`,
         stream: false
       })
     });
@@ -185,7 +108,6 @@ async function summarizeWithOllama(text: string): Promise<string> {
   return 'No summary generated.';
 }
 
-// Helper: Translate a topic to English using LLM
 async function translateTopicWithOllama(topic: string): Promise<string> {
   const models = ['llama3.2:latest', 'llama3.1:latest'];
   for (const model of models) {
@@ -194,7 +116,7 @@ async function translateTopicWithOllama(topic: string): Promise<string> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model,
-        prompt: `Translate the following college course topic from Portuguese to English. Only return the English translation, nothing else.\n\n${topic}`,
+        prompt: `Translate the following topic from Any language to English. Only return the English translation, nothing else.\n\n${topic}`,
         stream: false
       })
     });
@@ -257,62 +179,56 @@ export async function POST(req: NextRequest) {
     for (const [i, topic] of topics.entries()) {
       const translated = translatedTopics[i];
       pushStatus(`Scraping for topic ${i + 1} of ${topics.length}: ${translated}`);
-      let allContent = '';
       let allLinks: string[] = [];
+      let allSearchedLinks: string[] = [];
+      let linkSummaries: { url: string, summary: string }[] = [];
       let tries = 0;
-      let lastContentLength = 0;
-      // Keep scraping until we have at least 10,000 words or 10 URLs
-      while (allContent.split(/\s+/).length < 10000 && tries < 10) {
+      // Keep scraping until we have at least 10,000 words or 10 URLs (but limit to 5 URLs for summarization)
+      while (allLinks.length < 5 && tries < 10) {
         const urls = await searchWeb(translated);
+        // Add all searched links (even if not fetched), but limit to 5
+        for (const url of urls) {
+          if (allSearchedLinks.length < 5 && !allSearchedLinks.includes(url)) {
+            allSearchedLinks.push(url);
+          }
+        }
         let newContentAdded = false;
         for (const url of urls) {
-          if (!allLinks.includes(url)) {
+          if (allLinks.length < 5 && !allLinks.includes(url)) {
             const content = await fetchWebContent(url);
             if (content) {
-              allContent += ' ' + content;
+              logToFile(`Fetched content from ${url}`);
+              logToFile(`Summarizing link: ${url}\nContent fed to LLM (first 500 chars):\n${content.slice(0, 500)}\n---END OF FEED---`);
+              const linkSummary = await summarizeWithOllama(content);
+              logToFile(`Summary for link ${url}:\n${linkSummary}\n---END OF LINK SUMMARY---`);
+              linkSummaries.push({ url, summary: linkSummary });
               allLinks.push(url);
               newContentAdded = true;
-              logToFile(`Fetched content from ${url}`);
             }
           }
         }
         tries++;
-        // If no new content was added, break to avoid infinite loop
-        if (!newContentAdded) break;
       }
-      // Limit content to 10,000 words
-      const contentWords = allContent.split(/\s+/);
-      if (contentWords.length > 10000) {
-        allContent = contentWords.slice(0, 10000).join(' ');
-      }
-      // Summarize the collected content for the topic
-      logToFile(`Summarizing topic: ${translated}\nContent fed to LLM (first 500 chars):\n${allContent.slice(0, 500)}\n---END OF FEED---`);
-      pushStatus(`Summarizing content for topic ${i + 1} of ${topics.length}...`);
-      const summary = await summarizeWithOllama(allContent);
-      topicResults.push({ topic, translated, sources: allLinks, content: allContent, summary });
+      // Now summarize all link summaries for this topic
+      const allSummariesText = linkSummaries.map(ls => ls.summary).join('\n\n');
+      logToFile(`Summarizing all link summaries for topic: ${translated}\nContent fed to LLM (first 500 chars):\n${allSummariesText.slice(0, 500)}\n---END OF FEED---`);
+      pushStatus(`Summarizing all link summaries for topic ${i + 1} of ${topics.length}...`);
+      const topicSummary = await summarizeWithOllama(allSummariesText);
+      logToFile(`Final topic summary for ${translated}:\n${topicSummary}\n---END OF TOPIC SUMMARY---`);
+      topicResults.push({ topic, translated, sources: allSearchedLinks, content: allSummariesText, summary: topicSummary });
     }
-    pushStatus('Generating final summary document...');
-    // Generate a final summary document as a JSON array for tabbed UI
-    const summaryArray = topicResults.map(({ topic, translated, sources, content, summary }) => ({
-      topic,
-      translated,
-      summary,
-      sources
-    }));
-    const finalSummary = JSON.stringify(summaryArray);
-    // If requested, stream the response
-    if (isStatusStream) {
-      stream.push(encoder.encode('SUMMARY:' + finalSummary));
-      stream.push(null);
-    } else {
-      return NextResponse.json({ summary: finalSummary });
-    }
-  })().catch(err => {
-    console.error('Error processing request:', err);
-    stream.push(encoder.encode('ERROR:An error occurred while processing your request.'));
+    stream.push(encoder.encode('SUMMARY:' + JSON.stringify(
+      topicResults.map(({ topic, translated, summary, sources }) => ({
+        topic,
+        translated,
+        summary,
+        sources
+      }))
+    )));
     stream.push(null);
-  });
+    return;
+  })();
   return new Response(toWebStream(stream), {
-    headers: { 'Content-Type': 'text/markdown; charset=utf-8' }
+    headers: { 'Content-Type': 'application/json; charset=utf-8' }
   });
 }

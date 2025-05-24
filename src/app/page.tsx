@@ -230,46 +230,32 @@ function SummaryDisplay({
 						<div className={`font-bold mb-2 ${theme.text}`}>
 							{parsed[activeTab].translated}
 						</div>
-						{parsed[activeTab].summary
-							? parsed[activeTab].summary.split(/\n\nSources:/)[0]
-							: null}
+						{parsed[activeTab].summary}
 					</div>
-					{(() => {
-						const summary = parsed[activeTab].summary;
-						if (!summary) return null;
-						const parts = summary.split(/\n\nSources:/);
-						if (parts.length < 2) return null;
-						const sourcesBlock = parts[1];
-						const links = sourcesBlock
-							.split(/\n/)
-							.map((line: string) => line.trim())
-							.filter((line: string) => line.length > 0);
-						if (!links.length) return null;
-						return (
-							<div className='mb-2 mt-6'>
-								<div className='font-semibold text-blue-800 mb-1'>
-									Sources:
-								</div>
-								<ul className='list-disc pl-6'>
-									{links.map((url: string, idx: number) => (
-										<li key={idx} className='mb-2'>
-											<a
-												href={url}
-												target='_blank'
-												rel='noopener noreferrer'
-												className='text-blue-700 underline break-all'
-											>
-												{url}
-											</a>
-											<span className='ml-2 text-xs text-gray-500'>
-												{formatApaCitation(url)}
-											</span>
-										</li>
-									))}
-								</ul>
+					{parsed[activeTab].sources && parsed[activeTab].sources.length > 0 && (
+						<div className='mb-2 mt-6'>
+							<div className='font-semibold text-blue-800 mb-1'>
+								Sources:
 							</div>
-						);
-					})()}
+							<ul className='list-disc pl-6'>
+								{parsed[activeTab].sources.map((url: string, idx: number) => (
+									<li key={idx} className='mb-2'>
+										<a
+											href={url}
+											target='_blank'
+											rel='noopener noreferrer'
+											className='text-blue-700 underline break-all'
+										>
+											{url}
+										</a>
+										<span className='ml-2 text-xs text-gray-500'>
+											{formatApaCitation(url)}
+										</span>
+									</li>
+								))}
+							</ul>
+						</div>
+					)}
 				</div>
 			)}
 		</div>
