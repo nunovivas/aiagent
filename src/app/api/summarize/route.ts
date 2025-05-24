@@ -5,6 +5,7 @@ import { join } from 'path';
 import { Readable } from 'stream';
 // @ts-ignore
 import fontkit from '@pdf-lib/fontkit';
+import { SERPAPI_KEY_PATH, OLLAMA_API_URL, LOG_DIR } from '../../config';
 
 export const runtime = 'nodejs';
 
@@ -24,7 +25,7 @@ function toWebStream(nodeStream: Readable): ReadableStream<any> {
 async function searchWeb(query: string): Promise<string[]> {
   let apiKey = '';
   try {
-    apiKey = readFileSync(join(process.cwd(), 'serpapi.key'), 'utf8').trim();
+    apiKey = readFileSync(join(process.cwd(), SERPAPI_KEY_PATH), 'utf8').trim();
   } catch (e) {
     console.error('SerpAPI key file not found or unreadable:', e);
     return [];
@@ -104,7 +105,7 @@ async function summarizeWithOllamaBullets(syllabus: string, bulletResults: { bul
     prompt += `\n\nBullet: ${bullet}\nURL: ${url}\nContent: ${content}`;
   }
   for (const model of models) {
-    const response = await fetch('http://localhost:11434/api/generate', {
+    const response = await fetch(OLLAMA_API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -126,7 +127,7 @@ async function extractTopicsWithOllama(syllabus: string): Promise<string[]> {
   const models = ['llama3.2:latest', 'llama3.1:latest'];
   const prompt = `Given the following college course syllabus (in Portuguese), extract and return a JSON array of the main topics or bullet points, in Portuguese. Only return the JSON array, nothing else.\n\nSyllabus:\n${syllabus}`;
   for (const model of models) {
-    const response = await fetch('http://localhost:11434/api/generate', {
+    const response = await fetch(OLLAMA_API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, prompt, stream: false })
@@ -150,7 +151,7 @@ async function extractTopicsWithOllama(syllabus: string): Promise<string[]> {
 async function summarizeWithOllama(text: string): Promise<string> {
   const models = ['llama3.2:latest', 'llama3.1:latest'];
   for (const model of models) {
-    const response = await fetch('http://localhost:11434/api/generate', {
+    const response = await fetch(OLLAMA_API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -171,7 +172,7 @@ async function summarizeWithOllama(text: string): Promise<string> {
 async function translateTopicWithOllama(topic: string): Promise<string> {
   const models = ['llama3.2:latest', 'llama3.1:latest'];
   for (const model of models) {
-    const response = await fetch('http://localhost:11434/api/generate', {
+    const response = await fetch(OLLAMA_API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -196,7 +197,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Missing syllabus' }, { status: 400 });
   }
   // Create a unique log file for each submission in the log folder
-  const logDir = join(process.cwd(), 'src', 'app', 'log');
+  const logDir = join(process.cwd(), LOG_DIR);
   try { require('fs').mkdirSync(logDir, { recursive: true }); } catch {}
   const submissionId = Date.now() + '-' + Math.floor(Math.random() * 100000);
   const logPath = join(logDir, `ollama-summary-${submissionId}.txt`);
