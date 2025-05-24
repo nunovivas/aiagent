@@ -240,7 +240,14 @@ export async function POST(req: NextRequest) {
       } else {
         llmPrompt += `No web content could be retrieved for this topic.`;
       }
-      const summary = await summarizeWithOllama(llmPrompt);
+      let summary = await summarizeWithOllama(llmPrompt);
+      // Add links as a separate paragraph at the end
+      if (allLinks.length > 0) {
+        summary += `\n\nSources:\n` + allLinks.map(link => `- ${link}`).join('\n');
+      }
+      console.log(`Summary for topic "${translated}":`, summary);
+      console.log(`Collected ${allLinks.length} links and ${allContent.split(/\s+/).length} words for topic "${translated}"`);
+      console.log('Links:', allLinks);
       topicResults.push({ topic, translated, sources: allLinks, content: allContent, summary });
     }
     pushStatus('Rendering summary...');
